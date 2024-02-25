@@ -1,6 +1,11 @@
 import sys
 import configparser
 
+# Azure Speech
+import os
+import azure.cognitiveservices.speech as speechsdk
+import librosa
+
 #Azure Translation
 from azure.ai.translation.text import TextTranslationClient, TranslatorCredential
 from azure.ai.translation.text.models import InputTextItem
@@ -22,14 +27,22 @@ from linebot.v3.messaging import (
     ApiClient,
     MessagingApi,
     ReplyMessageRequest,
-    TextMessage
+    TextMessage,
+    AudioMessage
 )
 
 #Config Parser
 config = configparser.ConfigParser()
 config.read('config.ini')
 
+# Azure Speech Settings
+speech_config = speechsdk.SpeechConfig(subscription=config['AzureSpeech']['SPEECH_KEY'], 
+                                       region=config['AzureSpeech']['SPEECH_REGION'])
+audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=True)
+UPLOAD_FOLDER = 'static'
+
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 channel_access_token = config['Line']['CHANNEL_ACCESS_TOKEN']
 channel_secret = config['Line']['CHANNEL_SECRET']
@@ -65,10 +78,14 @@ def callback():
 def message_text(event):
     returnMessages = []
     translation_result = azure_translate(event.message.text)
-
+    print(translation_result)
+    
     for res in translation_result:
-        returnMessages.append(TextMessage(text=f"{res}"))
-
+        returnMessages.append(TextMessage(text=f"{res['text']}"))
+        if res['lang'] == 'en':
+            duration = azure_speech(res['text'])
+            returnMessages.append(AudioMessage(originalContentUrl=config["Deploy"]["URL"]+"/static/outputaudio.wav", duration=duration))
+   
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message_with_http_info(
@@ -77,6 +94,28 @@ def message_text(event):
                 messages=returnMessages
             )
         )
+def azure_speech(user_input):
+    # The language of the voice that speaks.
+    # if(user_input)
+    speech_config.speech_synthesis_voice_name='en-US-JennyNeural'
+    file_name = "outputaudio.wav"
+    file_config = speechsdk.audio.AudioOutputConfig(filename='static/'+file_name)
+    speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=file_config)
+
+    # Receives a text from console input and synthesizes it to wave file.
+    result = speech_synthesizer.speak_text_async(user_input).get()
+    # Check result
+    if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+        print("Speech synthesized for text [{}], and the audio was saved to [{}]".format(user_input, file_name))
+        audio_duration = round(librosa.get_duration(path='static/outputaudio.wav')*1000)
+        # print(audio_duration)
+        return audio_duration
+    elif result.reason == speechsdk.ResultReason.Canceled:
+        cancellation_details = result.cancellation_details
+        # print("Speech synthesis canceled: {}".format(cancellation_details.reason))
+        if cancellation_details.reason == speechsdk.CancellationReason.Error:
+            print("Error details: {}".format(cancellation_details.error_details))
+
 
 def azure_translate(user_input):
 
@@ -94,9 +133,10 @@ def azure_translate(user_input):
         if translation:
           ## jp -> tw, en
             if translation['detectedLanguage']['language'] == "ja":
-                return [translation.translations[1].text, translation.translations[2].text]
+                return [{'lang':'en','text': translation.translations[1].text}, 
+                        {'lang':'zh', 'text': translation.translations[2].text}]
             else:
-                return [translation.translations[0].text]
+                return [{'lang':'ja', 'text': translation.translations[0].text}]
 
         # return translation.translations[0].text
 
