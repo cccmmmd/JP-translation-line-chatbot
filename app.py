@@ -1,5 +1,6 @@
 import sys
 import configparser
+import emoji
 
 # Azure Speech
 import os
@@ -77,7 +78,8 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def message_text(event):
     returnMessages = []
-    translation_result = azure_translate(event.message.text)
+
+    translation_result = azure_translate(deEmojify(event.message.text))
     print(translation_result)
     
     for res in translation_result:
@@ -143,6 +145,9 @@ def azure_translate(user_input):
     except HttpResponseError as exception:
         print(f"Error Code: {exception.error}")
         print(f"Message: {exception.error.message}")
+
+def deEmojify(text):
+    return emoji.get_emoji_regexp().sub(u'', text)
 
 if __name__ == "__main__":
     app.run()
